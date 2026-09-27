@@ -1,0 +1,14 @@
+# Bus data never belongs in the repo (if you point FLEET_HOME at this folder)
+*/inbox/
+*/done/
+*/.listening
+*/.seen
+*/.monitor-owner
+_lanes.json
+.fleet-root
+
+# test bus
+.testbus/
+
+node_modules/
+*.log

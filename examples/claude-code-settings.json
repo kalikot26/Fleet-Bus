@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node ~/.fleet-bus/fleet.mjs:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node ~/.fleet-bus/fleet.mjs sessionstart", "statusMessage": "Arming fleet lane" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node ~/.fleet-bus/fleet.mjs ensure", "timeout": 8 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node ~/.fleet-bus/fleet.mjs settle", "timeout": 8 }
+        ]
+      }
+    ]
+  }
+}
