@@ -77,6 +77,7 @@ Message types:
 | `note` | informational |
 | `blocked` | the sender is blocked and needs something |
 | `ack` | an automatic receipt (sent by `ack`) |
+| `fyi` | a silent notice that needs no action; it never wakes the receiver (see [Silent FYI messages](#silent-fyi-messages)) |
 
 Message ids start with a zero-padded millisecond timestamp, so the inbox sorts chronologically.
 
@@ -88,15 +89,31 @@ A lane reads its own inbox (`poll`), prints one message in full (`read`), acts o
 
 `wait --lane <lane>` blocks until a message lands in that lane's inbox, prints it, and exits. An agent runs it **as a background task**. When it exits, the agent's harness wakes the agent, the agent handles the message, and then it runs `wait` again. While a listener is alive, `.listening` holds its pid (or, for long-running monitors, a timestamp refreshed every few seconds). That is how the bus knows a lane is **online**.
 
-**Persistent monitor (optional).** Some harnesses keep one long-running watcher instead of restarting `wait` after every message. `tools/lane-monitor.mjs <FLEET_HOME> <lane>` never exits. Every 10 seconds it refreshes the `.listening` lock in monitor mode, and it prints one `FLEET WAKE` line for each new message. The bus treats the lane as online for as long as that timestamp is fresh (under 45 seconds).
+**Persistent monitor (optional).** Some harnesses keep one long-running watcher instead of restarting `wait` after every message. `tools/lane-monitor.mjs <FLEET_HOME> <lane>` never exits. Every 10 seconds it refreshes the `.listening` lock in monitor mode, and it prints one `FLEET WAKE` line for each new message except `fyi` and `ack`. The bus treats the lane as online for as long as that timestamp is fresh (under 45 seconds).
 
 ### Presence and stale messages
 
 - `lanes` lists every lane as **ONLINE** (a live listener) or **OFFLINE**, with **last seen** (the last time that lane ran any fleet command) and its pending count. Online lanes come first.
 - `send --to online` broadcasts to every online lane except the sender, so rule changes don't pile up in lanes nobody will open again.
 - A direct `send` to an offline lane still queues the message, and prints a warning so the sender knows it may not be read soon.
-- **Expiry on resume.** When a lane lists its own inbox, `note`, `report` and `ack` messages older than 24 hours are archived automatically (marked `"expired": true`). Older `task`, `correction`, `gate` and `blocked` messages are kept, but shown with an **OLD** warning: confirm they still apply before acting. A session reopened after a week gets a short list instead of replaying a stale backlog.
-- `sweep` (dry run) and `sweep --apply` archive everything older than 24 hours in offline lanes. It is a one-time cleanup and never touches online lanes.
+- **Expiry on resume.** When a lane lists its own inbox, `note`, `report` and `ack` messages older than 24 hours are archived automatically (marked `"expired": true`), and `fyi` messages older than 2 hours are archived silently. Older `task`, `correction`, `gate` and `blocked` messages are kept, but shown with an **OLD** warning: confirm they still apply before acting. A session reopened after a week gets a short list instead of replaying a stale backlog.
+- `sweep` (dry run) and `sweep --apply` archive everything older than 24 hours (2 hours for `fyi`) in offline lanes. It is a one-time cleanup and never touches online lanes.
+
+### Silent FYI messages
+
+Every wake costs the receiving agent a turn. Send notices that need no action (dev-server start/stop notices, heads-ups, FYI cc) as `--type fyi`:
+
+```bash
+node fleet.mjs send --to online --from main --type fyi --subject "Dev server restarted" --body "No action needed."
+```
+
+- It is stored and readable with `poll` and `read`, but it never wakes `wait` or `tools/lane-monitor.mjs`.
+- The hooks do not count it as pending. `lanes` shows it separately as `(+N fyi)`.
+- It expires silently after 2 hours. Otherwise the receiver sees it tagged `[fyi]` the next time a real message wakes the lane.
+- `ack` on an `fyi` only archives it, the same as `done`, so no receipt goes back to wake the sender.
+- `--type fyi --authorized` is refused. Work the receiver may act on must be a `task`.
+
+Use `note` or `report` only when the recipient must act or answer.
 
 ### Auto-arming in Claude Code
 
@@ -242,7 +259,7 @@ Fleet Bus moves text between agents. It gives no agent new powers. The protocol 
 node test-fleet.mjs
 ```
 
-The test creates a throwaway bus under `./.testbus` and checks presence, online-only broadcast, expiry, sweep, root handling, and the core commands.
+The test creates a throwaway bus under `./.testbus` and checks presence, online-only broadcast, expiry, sweep, silent `fyi` handling, root handling, and the core commands.
 
 ## License
 

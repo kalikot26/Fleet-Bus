@@ -11,14 +11,17 @@ assert.equal(path.dirname(home), root);
 fs.rmSync(home, { recursive: true, force: true });
 fs.mkdirSync(home);
 
-function runWithRoot(fleetRoot, ...args) {
+function spawnFleet(fleetRoot, args) {
   const env = { ...process.env, FLEET_HOME: home };
   if (fleetRoot === null) delete env.FLEET_ROOT;
   else env.FLEET_ROOT = fleetRoot;
-  const result = spawnSync(process.execPath, [cli, ...args], {
+  return spawnSync(process.execPath, [cli, ...args], {
     cwd: root, env,
     encoding: 'utf8', input: '',
   });
+}
+function runWithRoot(fleetRoot, ...args) {
+  const result = spawnFleet(fleetRoot, args);
   assert.equal(result.status, 0, `${args.join(' ')}: ${result.stderr}`);
   return result;
 }
@@ -166,6 +169,70 @@ try {
   assert.equal(runWithRoot(envRoot, 'sessionstart', '--cwd', path.join(fileRoot, 'excluded-lane')).stdout, '');
   assert.match(runWithRoot(envRoot, 'sessionstart', '--cwd', path.join(envRoot, 'env-lane')).stdout, /FLEET lane: env-lane/);
   console.log('PASS env root: FLEET_ROOT overrides .fleet-root');
+
+  run('init', '--lane', 'fyi-wait');
+  put('fyi-wait', 'wait-fyi', 'fyi', 0);
+  const quiet = run('wait', '--lane', 'fyi-wait', '--interval', '1', '--timeout', '0.1').stdout;
+  assert.match(quiet, /quiet 0m on fyi-wait/);
+  assert.doesNotMatch(quiet, /FLEET WAKE/);
+  console.log('PASS fyi wait: an fyi-only inbox does not wake wait');
+
+  put('fyi-wait', 'wait-task', 'task', 0);
+  const woke = run('wait', '--lane', 'fyi-wait', '--interval', '1', '--timeout', '0.1').stdout;
+  assert.match(woke, /FLEET WAKE — lane fyi-wait/);
+  assert.match(woke, /\[fyi\] wait-fyi/);
+  assert.match(woke, /\[task\] wait-task/);
+  assert.match(woke, /fyi\/ack messages need only done, no ack/);
+  console.log('PASS fyi wake: a task after an fyi wakes, and the fyi is listed with it');
+
+  const fyiCwd = path.join(root, 'fyi-lane');
+  run('register', '--lane', 'fyi-lane', '--cwd', fyiCwd);
+  run('send', '--to', 'fyi-lane', '--from', 'alice', '--type', 'fyi', '--subject', 'dev server up', '--body', 'no action');
+  assert.match(run('lanes').stdout, /^fyi-lane\tOFFLINE\tlast seen 0m\t0 pending \(\+1 fyi\)$/m);
+  assert.match(run('banner', '--cwd', fyiCwd).stdout, /^FLEET lane: fyi-lane {2}\(0 pending\)\n {2}Arm your poller/);
+  assert.equal(run('settle', '--cwd', fyiCwd).stdout, 'FLEET: lane "fyi-lane" settled but NOT listening. Re-arm so it stays reachable: /fleet\n');
+  assert.match(run('ensure', '--cwd', fyiCwd).stdout, /^\[fleet\] lane "fyi-lane" listener is DOWN — /);
+  const fyiStart = run('sessionstart', '--cwd', fyiCwd).stdout;
+  assert.match(fyiStart, /^FLEET lane: fyi-lane {2}\(0 pending\)\n/);
+  assert.doesNotMatch(fyiStart, /already waiting/);
+  put('fyi-lane', 'fyi-lane-task', 'task', 0);
+  assert.match(run('lanes').stdout, /^fyi-lane\t.*\t1 pending \(\+1 fyi\)$/m);
+  assert.match(run('settle', '--cwd', fyiCwd).stdout, / — 1 message\(s\) already waiting/);
+  console.log('PASS fyi counts: lanes, banner, settle, ensure and sessionstart ignore fyi');
+
+  const expCwd = path.join(root, 'fyi-exp');
+  run('init', '--lane', 'fyi-exp');
+  put('fyi-exp', 'exp-old-fyi', 'fyi', 3);
+  put('fyi-exp', 'exp-fresh-fyi', 'fyi', 1);
+  put('fyi-exp', 'exp-old-note', 'note', 25);
+  assert.match(run('poll', '--lane', 'fyi-exp').stdout, /FLEET: archived 1 expired message\(s\) older than 24h \(notes\/reports\)\.\n/);
+  assert.deepEqual(pending('fyi-exp'), ['exp-fresh-fyi.json']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder('fyi-exp', 'done'), 'exp-old-fyi.json'))).expired, true);
+  monitor('fyi-exp');
+  for (const hook of ['sessionstart', 'ensure']) {
+    put('fyi-exp', `exp-${hook}-fyi`, 'fyi', 3);
+    const out = run(hook, '--cwd', expCwd).stdout;
+    assert.equal(out, hook === 'ensure' ? '' : 'FLEET lane: fyi-exp — already listening (0 pending)\n');
+    assert.ok(done('fyi-exp').includes(`exp-${hook}-fyi.json`));
+  }
+  console.log('PASS fyi expiry: fyi archived silently after 2h; a 25h note still prints the archive line');
+
+  run('init', '--lane', 'fyi-sender');
+  const fyiId = run('send', '--to', 'fyi-ack', '--from', 'fyi-sender', '--type', 'fyi', '--body', 'heads-up').stdout.match(/id=(\S+)/)[1];
+  assert.doesNotMatch(run('ack', '--lane', 'fyi-ack', '--id', fyiId).stdout, /sent ack/);
+  assert.deepEqual(pending('fyi-sender'), []);
+  assert.deepEqual(pending('fyi-ack'), []);
+  assert.ok(done('fyi-ack').includes(`${fyiId}.json`));
+  const taskId = run('send', '--to', 'fyi-ack', '--from', 'fyi-sender', '--type', 'task', '--body', 'real').stdout.match(/id=(\S+)/)[1];
+  run('ack', '--lane', 'fyi-ack', '--id', taskId);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder('fyi-sender', 'inbox'), pending('fyi-sender')[0]))).reply_to, taskId);
+  console.log('PASS fyi ack: ack archives an fyi and sends nothing; ack of a task still replies');
+
+  const refused = spawnFleet(root, ['send', '--to', 'fyi-ack', '--from', 'fyi-sender', '--type', 'fyi', '--authorized', '--body', 'hidden task']);
+  assert.equal(refused.status, 2);
+  assert.match(refused.stderr, /fyi cannot be --authorized: use a task/);
+  assert.deepEqual(pending('fyi-ack'), []);
+  console.log('PASS fyi authorized: --type fyi --authorized is refused');
 } finally {
   fs.rmSync(home, { recursive: true, force: true });
 }
