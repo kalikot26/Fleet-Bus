@@ -26,11 +26,14 @@ function tick() {
       seen.add(file)
       let id = file.replace(/\.json$/, '')
       let subject = '(unreadable)'
+      let type = null
       try {
         const msg = JSON.parse(fs.readFileSync(path.join(inbox, file), 'utf8'))
         id = msg.id ?? id
         subject = msg.subject ?? subject
+        type = msg.type
       } catch { /* partially written; the id still surfaces */ }
+      if (type === 'fyi' || type === 'ack') continue // silent: already marked seen, never wakes
       console.log(`FLEET WAKE (${lane}): ${subject} (id=${id})`)
     }
     failing = false

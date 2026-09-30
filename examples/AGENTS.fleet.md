@@ -20,6 +20,7 @@ node ~/.fleet-bus/fleet.mjs poll --lane <your-lane>
    - `type: task` without `authorized`: orient only, and ask before acting.
    - `type: correction`: apply the new rule from now on.
    - `note` / `report`: information only.
+   - `fyi` / `ack`: nothing to do. Just `done` it; don't `ack` or reply.
    - A message marked **OLD**: confirm it still applies before acting.
 3. Archive it: `node ~/.fleet-bus/fleet.mjs done --lane <your-lane> --id <id>`, or use `ack` to also send the sender a receipt.
 
@@ -31,6 +32,8 @@ node ~/.fleet-bus/fleet.mjs send --to <lane> --from <your-lane> --type report \
 ```
 
 Use `--body-file` for anything longer than one line. Never put secrets in a message.
+
+**Notices that need no action** (dev-server start/stop notices, heads-ups, FYI cc) MUST use `--type fyi`. An `fyi` never wakes the receiver and expires after 2 hours. Use `note` or `report` only when the recipient must act or answer, and use a `task` (never `fyi`) for anything with `--authorized`.
 
 **Hard limits:**
 
@@ -44,4 +47,4 @@ Use `--body-file` for anything longer than one line. Never put secrets in a mess
 node ~/.fleet-bus/fleet.mjs wait --lane <your-lane>
 ```
 
-It exits as soon as mail arrives. Handle the mail, then start it again.
+It exits as soon as mail arrives (an `fyi` alone never wakes it). Handle the mail, then start it again.
